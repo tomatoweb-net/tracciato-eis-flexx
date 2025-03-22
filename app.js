@@ -25,8 +25,14 @@ const findProductByEAN = (ean13) => {
 
 // Webhook listener
 app.post('/webhook', async (req, res) => {
-  const orderData = req.body[0]; // perché arriva in un array
-  console.log('📦 Ricevuto ordine:', orderData);
+  const orderData = req.body;
+
+  console.log('📦 Ricevuto ordine:', JSON.stringify(orderData, null, 2));
+
+  if (!orderData || !orderData.record_T || !orderData.record_C || !orderData.records_R) {
+    console.error('❌ Payload incompleto o errato:', JSON.stringify(orderData, null, 2));
+    return res.status(400).send('Payload incompleto');
+  }
 
   const ordineId = orderData.record_T["Vostro ID ordine"];
   const record_T = orderData.record_T;
@@ -36,34 +42,40 @@ app.post('/webhook', async (req, res) => {
   const fileNameTmp = `output/Ord_${ordineId}.tmp`;
   const fileNameCsv = `output/Ord_${ordineId}.csv`;
 
-  // Utilizzo encoding windows-1252 senza BOM
-  const writeStream = fs.createWriteStream(fileNameTmp, { encoding: 'ascii' });
+  const writeStream = fs.createWriteStream(fileNameTmp, { encoding: 'utf-8' });
 
   try {
-    // Formatta data e ora nel formato corretto (D = YYYYMMDD, H = HHMMSS)
     const dataOrdine = record_T["Data ordine"].replace(/-/g, '');
     const oraOrdine = record_T["Ora ordine"].replace(/:/g, '');
 
-    // Record T (testata ordine)
-    writeStream.write(`T;${ordineId};${ordineId};${dataOrdine};${oraOrdine};${record_T["Vostro ID cliente"]};K;;1000020;${record_T["Spese spedizione"]};${record_T["Importo totale vendita"]};0;;false\r\n`);
+    // ✅ RECORD T - Testata Ordine
+    writeStream.write(
+      `T;${ordineId};${ordineId};${dataOrdine};${oraOrdine};${record_T["Vostro ID cliente"]};K;1000020;;${record_T["Spese spedizione"]};${record_T["Importo totale vendita"]};0;;false\r\n`
+    );
 
-    // Record C (anagrafica cliente)
-    writeStream.write(`C;${record_C["Vostro ID cliente"]};${record_C["Cognome"]};${record_C["Nome"]};${record_C["Ragione sociale società"] || ''};${record_C["Indirizzo"]};${record_C["CAP"]};${record_C["Città"]};${record_C["Provincia"]};${record_C["Nazione"]};${record_C["E-mail"]};${record_C["Telefono"]};;;;;;;;;;;\r\n`);
+    // ✅ RECORD C - Cliente
+    writeStream.write(
+      `C;${record_C["Vostro ID cliente"]};${record_C["Cognome"]};${record_C["Nome"]};${record_C["Ragione sociale società"] || ''};${record_C["Indirizzo"]};${record_C["CAP"]};${record_C["Città"]};${record_C["Provincia"]};${record_C["Nazione"]};${record_C["E-mail"]};${record_C["Telefono"]};;;;;;;;;;;\r\n`
+    );
 
-    // Record R (righe ordini)
+    // ✅ RECORD R - Righe Ordine
     records_R.forEach((riga, index) => {
       const numeroRiga = index + 1;
       const idRigaOrdineUnivoco = `${ordineId}${numeroRiga}`;
+    
       const prodotto = findProductByEAN(riga.SKU);
-
+    
       if (!prodotto) {
         console.log(`❌ SKU ${riga.SKU} non trovato nel CSV`);
         return;
       }
-
-      writeStream.write(`R;${ordineId};${idRigaOrdineUnivoco};${numeroRiga};${prodotto["id prodotto"]};${prodotto["id colore"]};${prodotto["id taglia"]};${riga["Quantità ordinata"]};${riga["Prezzo unitario"]};;;0\r\n`);
+    
+      writeStream.write(
+        `R;${ordineId};${idRigaOrdineUnivoco};${numeroRiga};${prodotto["id prodotto"].trim()};${prodotto["id colore"].trim()};${prodotto["id taglia"].trim()};${riga["Quantità ordinata"].toString().trim()};${riga["Prezzo unitario"].toString().trim()};;;0\r\n`
+      );
     });
-
+    
+    // ✅ Chiudo il file
     writeStream.end();
 
     writeStream.on('finish', async () => {
